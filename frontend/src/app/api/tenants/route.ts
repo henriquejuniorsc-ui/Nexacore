@@ -155,8 +155,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Criar tudo em uma transação
+    console.log("[Tenants API] Starting tenant creation transaction");
+    
+    // Criar tudo em uma transação otimizada para serverless
     const result = await prisma.$transaction(async (tx) => {
+      console.log("[Tenants API] Creating tenant...");
       // 1. Criar tenant
       const tenant = await tx.tenant.create({
         data: {
@@ -172,45 +175,34 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      console.log("[Tenants API] Creating subscription and user...");
       // 2. Criar subscription (trial de 14 dias)
       const trialEnd = new Date();
       trialEnd.setDate(trialEnd.getDate() + 14);
 
-      await tx.subscription.create({
-        data: {
-          tenantId: tenant.id,
-          plan: "STARTER",
-          status: "TRIALING",
-          trialEndsAt: trialEnd,
-        },
-      });
+      // 3. Criar subscription e user em paralelo
+      const [subscription, user] = await Promise.all([
+        tx.subscription.create({
+          data: {
+            tenantId: tenant.id,
+            plan: "STARTER",
+            status: "TRIALING",
+            trialEndsAt: trialEnd,
+          },
+        }),
+        tx.user.create({
+          data: {
+            tenantId: tenant.id,
+            clerkUserId: userId,
+            email: clerkUser.emailAddresses[0]?.emailAddress || data.email,
+            name: clerkUser.fullName || data.clinicName,
+            role: "OWNER",
+          },
+        }),
+      ]);
 
-      // 3. Criar usuário
-      const user = await tx.user.create({
-        data: {
-          tenantId: tenant.id,
-          clerkUserId: userId,
-          email: clerkUser.emailAddresses[0]?.emailAddress || data.email,
-          name: clerkUser.fullName || data.clinicName,
-          role: "OWNER",
-        },
-      });
-
-      // 4. Criar profissionais
-      const professionals = await Promise.all(
-        data.professionals.map((pro) =>
-          tx.professional.create({
-            data: {
-              tenantId: tenant.id,
-              name: pro.name,
-              email: pro.email,
-              specialty: pro.specialty,
-            },
-          })
-        )
-      );
-
-      // 5. Criar tipos de procedimento padrão
+      console.log("[Tenants API] Creating professionals and procedure types...");
+      // 4. Criar profissionais e tipos de procedimento em paralelo
       const defaultProcedureTypes = [
         { name: "Botox", reminderDays: 120 },
         { name: "Preenchimento Labial", reminderDays: 180 },
@@ -222,19 +214,34 @@ export async function POST(request: NextRequest) {
         { name: "Bioestimulador de Colágeno", reminderDays: 365 },
       ];
 
-      const procedureTypes = await Promise.all(
-        defaultProcedureTypes.map((pt) =>
-          tx.procedureType.create({
-            data: {
-              tenantId: tenant.id,
-              name: pt.name,
-              reminderDays: pt.reminderDays,
-            },
-          })
-        )
-      );
+      const [professionals, procedureTypes] = await Promise.all([
+        Promise.all(
+          data.professionals.map((pro) =>
+            tx.professional.create({
+              data: {
+                tenantId: tenant.id,
+                name: pro.name,
+                email: pro.email,
+                specialty: pro.specialty,
+              },
+            })
+          )
+        ),
+        Promise.all(
+          defaultProcedureTypes.map((pt) =>
+            tx.procedureType.create({
+              data: {
+                tenantId: tenant.id,
+                name: pt.name,
+                reminderDays: pt.reminderDays,
+              },
+            })
+          )
+        ),
+      ]);
 
-      // 6. Criar serviços
+      console.log("[Tenants API] Creating services...");
+      // 5. Criar serviços
       const services = await Promise.all(
         data.services.map(async (svc) => {
           // Tentar encontrar procedureType correspondente
@@ -255,19 +262,31 @@ export async function POST(request: NextRequest) {
         })
       );
 
-      // 7. Vincular profissionais aos serviços
+      console.log("[Tenants API] Linking professionals to services...");
+      // 6. Vincular profissionais aos serviços usando createMany (mais eficiente)
+      const professionalServiceLinks = [];
       for (const professional of professionals) {
         for (const service of services) {
-          await tx.professionalService.create({
-            data: {
-              professionalId: professional.id,
-              serviceId: service.id,
-            },
+          professionalServiceLinks.push({
+            professionalId: professional.id,
+            serviceId: service.id,
           });
         }
       }
 
+      // Criar todos os vínculos de uma vez
+      if (professionalServiceLinks.length > 0) {
+        await tx.professionalService.createMany({
+          data: professionalServiceLinks,
+          skipDuplicates: true,
+        });
+      }
+
+      console.log("[Tenants API] Transaction completed successfully");
       return { tenant, user, professionals, services };
+    }, {
+      maxWait: 10000, // 10s para obter conexão
+      timeout: 30000, // 30s timeout total (Vercel permite até 60s)
     });
 
     return NextResponse.json({
