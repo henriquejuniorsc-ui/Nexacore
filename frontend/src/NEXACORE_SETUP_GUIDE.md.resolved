@@ -1,0 +1,337 @@
+# 🚀 NexaCore - Guia Completo de Setup
+
+## Seu Projeto de SaaS para Clínicas Médicas
+
+**Autor:** Henrique  
+**Data:** Fevereiro 2026  
+**Versão:** 1.0
+
+---
+
+## 📋 Resumo Executivo
+
+O NexaCore é um **SaaS completo para gestão de clínicas** que inclui:
+- Agendamentos com sincronização Google Calendar
+- Atendimento via WhatsApp com IA
+- Gestão de clientes/pacientes
+- Cobrança automática (PIX, Boleto, Cartão)
+- Dashboard com métricas
+- Sistema de lembretes
+- Multi-tenant (várias clínicas na mesma plataforma)
+
+---
+
+## 🏗️ Arquitetura do Sistema
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    FRONTEND (Next.js 14)                │
+│                   Vercel / seu domínio                  │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────┐
+│                  API Routes (Next.js)                   │
+│     /api/appointments, /api/clients, /api/inbox...      │
+└─────────┬───────────────────────────────────┬───────────┘
+          │                                   │
+          ▼                                   ▼
+┌─────────────────┐                 ┌─────────────────────┐
+│    PostgreSQL   │                 │   Evolution API     │
+│   (Supabase /   │                 │   (WhatsApp)        │
+│    Neon / RDS)  │                 │   Auto-hospedado    │
+└─────────────────┘                 └─────────────────────┘
+          │                                   
+          ▼                          
+┌─────────────────────────────────────────────────────────┐
+│                 Serviços Externos                       │
+│  • Clerk (Autenticação)    • OpenAI (IA)               │
+│  • Asaas (Pagamentos)      • Google Calendar            │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## ❓ Usa N8N?
+
+**NÃO!** O NexaCore **não usa N8N**. Toda a automação é feita internamente via:
+
+1. **API Routes do Next.js** - Endpoints REST
+2. **Cron Jobs** - Agendados via `/api/cron/*`
+3. **Webhooks** - Recebe eventos de:
+   - Evolution API (WhatsApp)
+   - Asaas (Pagamentos)
+   - Chatwoot (Chat)
+   - Baileys (WhatsApp alternativo)
+
+Se você quiser integrar N8N no futuro, é possível criar webhooks customizados.
+
+---
+
+## 🛠️ O que você precisa criar/configurar
+
+### 1. Banco de Dados PostgreSQL
+
+**Opções Gratuitas/Baratas:**
+
+| Serviço | Tier Grátis | Recomendação |
+|---------|-------------|--------------|
+| **Supabase** | 500MB, 2 projetos | ⭐ Recomendo - fácil de usar |
+| **Neon** | 512MB, branching | Bom para dev |
+| **Railway** | $5/mês créditos | Deploy fácil |
+| **Render** | 90 dias grátis | Bom para produção |
+
+**Como criar no Supabase:**
+1. Acesse https://supabase.com
+2. Crie projeto "nexacore-henrique"
+3. Copie a connection string: `postgresql://user:pass@host:5432/postgres`
+
+---
+
+### 2. Autenticação - Clerk
+
+**Site:** https://clerk.com
+
+1. Criar conta gratuita
+2. Criar aplicação "NexaCore"
+3. Obter:
+   - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` (começa com `pk_`)
+   - `CLERK_SECRET_KEY` (começa com `sk_`)
+
+**Tier Grátis:** 10.000 usuários/mês
+
+---
+
+### 3. OpenAI API (Para IA)
+
+**Site:** https://platform.openai.com
+
+1. Criar conta
+2. Gerar API Key
+3. Adicionar créditos ($10 já dura bastante)
+
+**Variável:** `OPENAI_API_KEY`
+
+---
+
+### 4. WhatsApp - Evolution API (Opcional)
+
+Para integrar WhatsApp, você tem 2 opções:
+
+**Opção A: Docker local/VPS**
+- Usar o [docker-compose.yml](file:///c:/Users/Henrique/Downloads/nexacore-ui-bloco1%20%282%29/nexacore-saas-main/docker-compose.yml) que já vem no projeto
+- Precisa de VPS (DigitalOcean, Hetzner, etc)
+
+**Opção B: Sem WhatsApp inicialmente**
+- Desabilitar a integração e usar depois
+
+---
+
+### 5. Pagamentos - Asaas (Opcional)
+
+**Site:** https://www.asaas.com
+
+1. Criar conta (usar Sandbox para testes)
+2. Obter `ASAAS_API_KEY`
+3. Configurar webhook
+
+---
+
+### 6. Google Calendar (Opcional)
+
+1. Criar projeto no Google Cloud Console
+2. Habilitar Calendar API
+3. Criar credenciais OAuth
+
+---
+
+## 📄 Arquivo .env Completo
+
+Crie o arquivo `.env` na raiz do projeto:
+
+```env
+# ===========================================
+# APP
+# ===========================================
+NEXT_PUBLIC_APP_URL=https://seu-dominio.vercel.app
+NEXT_PUBLIC_APP_NAME=NexaCore
+
+# ===========================================
+# DATABASE (Supabase/Neon/Railway)
+# ===========================================
+DATABASE_URL="postgresql://user:password@host:5432/database"
+
+# ===========================================
+# CLERK (Autenticação) - OBRIGATÓRIO
+# ===========================================
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_xxxxx
+CLERK_SECRET_KEY=sk_test_xxxxx
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/auth/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/auth/sign-up
+NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/dashboard
+NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/onboarding
+
+# ===========================================
+# OPENAI (IA) - OBRIGATÓRIO para IA
+# ===========================================
+OPENAI_API_KEY=sk-xxxxx
+
+# ===========================================
+# EVOLUTION API (WhatsApp) - OPCIONAL
+# ===========================================
+EVOLUTION_API_URL=http://localhost:8080
+EVOLUTION_API_KEY=sua-chave-aqui
+
+# ===========================================
+# ASAAS (Pagamentos) - OPCIONAL
+# ===========================================
+# Sandbox: https://sandbox.asaas.com/api/v3
+# Production: https://api.asaas.com/v3
+ASAAS_API_KEY=xxxxx
+ASAAS_API_URL=https://sandbox.asaas.com/api/v3
+ASAAS_WEBHOOK_TOKEN=token-secreto
+
+# ===========================================
+# GOOGLE CALENDAR - OPCIONAL
+# ===========================================
+GOOGLE_CLIENT_ID=xxxxx
+GOOGLE_CLIENT_SECRET=xxxxx
+GOOGLE_REDIRECT_URI=https://seu-dominio.vercel.app/api/auth/callback/google
+
+# ===========================================
+# REDIS (para cache) - OPCIONAL
+# ===========================================
+REDIS_URL=redis://localhost:6379
+
+# ===========================================
+# CRON JOBS
+# ===========================================
+CRON_SECRET=token-secreto-para-cron
+```
+
+---
+
+## 🚀 Deploy na Vercel
+
+### Passo a Passo:
+
+1. **Faça push do código para GitHub**
+```bash
+git init
+git add .
+git commit -m "Initial commit"
+git remote add origin https://github.com/seu-user/nexacore.git
+git push -u origin main
+```
+
+2. **Conecte na Vercel**
+   - Acesse https://vercel.com
+   - Import do GitHub
+   - Selecione o repositório
+
+3. **Configure as variáveis de ambiente**
+   - Cole todas as variáveis do `.env`
+
+4. **Deploy!**
+
+---
+
+## 📊 Checklist de Setup
+
+### Mínimo para Funcionar:
+- [ ] Banco PostgreSQL criado (Supabase)
+- [ ] Clerk configurado (autenticação)
+- [ ] Variáveis de ambiente configuradas
+- [ ] `npx prisma db push` executado
+- [ ] Deploy na Vercel
+
+### Para Funcionalidade Completa:
+- [ ] OpenAI API Key (IA)
+- [ ] Evolution API (WhatsApp)
+- [ ] Asaas configurado (Pagamentos)
+- [ ] Google Calendar API
+
+---
+
+## 🔄 Adaptações para seu Uso
+
+### 1. Renomear para sua Marca
+- Alterar `NexaCore` no código
+- Trocar cores (tailwind.config.ts)
+- Trocar logo
+
+### 2. Campos Específicos para Clínicas Médicas
+- Histórico médico
+- CID/Diagnósticos
+- Receitas/Prescrições
+- Prontuário eletrônico
+
+### 3. Integrações Adicionais
+- Sistemas de prontuário (TISS, TUSS)
+- Integração com convênios
+
+---
+
+## 📁 Organizar como Projeto Separado
+
+Para organizar como projeto próprio:
+
+1. **Mover para pasta definitiva:**
+```bash
+# Criar pasta de projetos
+mkdir C:\Users\Henrique\Projetos
+# Mover NexaCore
+move "C:\Users\Henrique\Downloads\nexacore-ui-bloco1 (2)\nexacore-saas-main" C:\Users\Henrique\Projetos\nexacore
+```
+
+2. **Abrir no VS Code:**
+```bash
+code C:\Users\Henrique\Projetos\nexacore
+```
+
+3. **Inicializar Git:**
+```bash
+cd C:\Users\Henrique\Projetos\nexacore
+git init
+git add .
+git commit -m "Initial commit - NexaCore SaaS"
+```
+
+---
+
+## 💰 Custos Estimados
+
+| Serviço | Grátis | Produção |
+|---------|--------|----------|
+| Vercel | ✅ Hobby | ~$20/mês Pro |
+| Supabase | ✅ 500MB | ~$25/mês |
+| Clerk | ✅ 10k users | ~$25/mês |
+| OpenAI | $5-10/mês | $20-50/mês |
+| Evolution API | Seu VPS | ~$10/mês VPS |
+| Asaas | ✅ Sandbox | % por transação |
+
+**Custo mínimo para começar:** ~$0/mês (tudo no tier gratuito)
+**Custo produção completa:** ~$80-150/mês
+
+---
+
+## 🎯 Próximos Passos Recomendados
+
+1. **Criar conta Supabase** e banco de dados
+2. **Criar conta Clerk** e obter chaves
+3. **Configurar .env** com suas credenciais
+4. **Rodar `npx prisma db push`** para criar tabelas
+5. **Testar localmente** com `npm run dev`
+6. **Deploy na Vercel**
+
+---
+
+## 🆘 Precisa de Ajuda?
+
+Se precisar de ajuda com qualquer etapa, é só me perguntar!
+
+- Configuração do banco de dados
+- Configuração do Clerk
+- Adaptação de campos para clínicas médicas
+- Integração WhatsApp
+- Deploy

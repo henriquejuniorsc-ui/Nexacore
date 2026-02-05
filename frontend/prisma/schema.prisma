@@ -1,0 +1,932 @@
+// Prisma Schema for NexaCore SaaS
+// Multi-tenant architecture with RLS support
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ==================== TENANT (CLÍNICA) ====================
+model Tenant {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Informações básicas
+  name     String
+  slug     String  @unique
+  email    String
+  phone    String?
+  document String? // CNPJ
+  logo     String?
+
+  // Configurações da clínica
+  description String? @db.Text
+  address     String?
+  city        String?
+  state       String?
+  zipCode     String?
+
+  // Configurações de funcionamento
+  businessHours Json? // Horários de funcionamento
+  timezone      String @default("America/Sao_Paulo")
+
+  // Configurações de IA
+  systemPrompt String? @db.Text
+  aiEnabled    Boolean @default(true)
+
+  // Chatwoot
+  chatwootUrl       String?
+  chatwootApiKey    String?
+  chatwootAccountId String?
+  chatwootInboxId   String?
+
+  // Google Calendar
+  googleCalendarIds Json? @default("[]")
+  googleCredentials Json?
+
+  // Configurações de Lembretes
+  reminderSettings Json? // { "24h": true, "2h": true, "messages": {...} }
+
+  // Status
+  isActive       Boolean @default(true)
+  onboardingStep Int     @default(0)
+
+  // Relationships
+  subscription      Subscription?
+  users             User[]
+  professionals     Professional[]
+  services          Service[]
+  clients           Client[]
+  appointments      Appointment[]
+  payments          Payment[]
+  messages          Message[]
+  aiConversations   AIConversation[]
+  procedureTypes    ProcedureType[]
+  conversations     Conversation[]
+  tags              Tag[]
+  cannedResponses   CannedResponse[]
+  invitations       Invitation[]
+  products          Product[]
+  stockMovements    StockMovement[]
+  upsellRules       UpsellRule[]
+  upsellSuggestions UpsellSuggestion[]
+
+  @@index([slug])
+  @@index([email])
+}
+
+// ==================== SUBSCRIPTION (PLANOS) ====================
+model Subscription {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  plan   SubscriptionPlan   @default(STARTER)
+  status SubscriptionStatus @default(TRIALING)
+
+  maxProfessionals Int @default(1)
+  maxAppointments  Int @default(100)
+
+  priceMonthly Float        @default(97)
+  billingCycle BillingCycle @default(MONTHLY)
+
+  asaasCustomerId     String?
+  asaasSubscriptionId String?
+
+  trialEndsAt        DateTime?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  canceledAt         DateTime?
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+enum SubscriptionPlan {
+  STARTER
+  PRO
+  BUSINESS
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  PAUSED
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+// ==================== INVITATION (CONVITES) ====================
+model Invitation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  email String
+  name  String
+  role  UserRole @default(PROFESSIONAL)
+
+  professionalId String?
+  professional   Professional? @relation(fields: [professionalId], references: [id])
+
+  token String @unique
+
+  status     InvitationStatus @default(PENDING)
+  acceptedAt DateTime?
+  invitedBy  String?
+
+  @@unique([tenantId, email])
+  @@index([token])
+  @@index([tenantId, status])
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  CANCELED
+}
+
+// ==================== USER (USUÁRIOS) ====================
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clerkUserId String @unique
+
+  email  String
+  name   String
+  avatar String?
+  phone  String?
+
+  tenantId String
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role     UserRole @default(PROFESSIONAL)
+
+  professionalId String?       @unique
+  professional   Professional? @relation(fields: [professionalId], references: [id])
+
+  isActive    Boolean   @default(true)
+  lastLoginAt DateTime?
+
+  preferences Json?
+
+  aiConversations       AIConversation[]
+  assignedConversations Conversation[]
+
+  @@index([tenantId])
+  @@index([clerkUserId])
+  @@index([email])
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  PROFESSIONAL
+  RECEPTIONIST
+}
+
+// ==================== PROFESSIONAL (PROFISSIONAIS) ====================
+model Professional {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name      String
+  email     String?
+  phone     String?
+  avatar    String?
+  specialty String?
+  bio       String? @db.Text
+
+  googleCalendarId   String?
+  googleCredentials  Json?
+  syncGoogleCalendar Boolean @default(false)
+
+  workingHours        Json?
+  appointmentDuration Int   @default(60)
+  bufferTime          Int   @default(15)
+
+  isActive Boolean @default(true)
+
+  user         User?
+  services     ProfessionalService[]
+  appointments Appointment[]
+  invitations  Invitation[]
+  products     Product[]
+
+  @@index([tenantId])
+}
+
+// ==================== SERVICE (SERVIÇOS/PROCEDIMENTOS) ====================
+model Service {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String? @db.Text
+  duration    Int
+  price       Float
+
+  procedureTypeId String?
+  procedureType   ProcedureType? @relation(fields: [procedureTypeId], references: [id])
+
+  category String?
+
+  upsellServiceIds Json? @default("[]")
+
+  isActive Boolean @default(true)
+
+  professionals  ProfessionalService[]
+  appointments   Appointment[]
+  triggerUpsells   UpsellRule[] @relation("TriggerService")
+  suggestUpsells   UpsellRule[] @relation("SuggestService")
+
+  @@index([tenantId])
+}
+
+model ProfessionalService {
+  id String @id @default(cuid())
+
+  professionalId String
+  professional   Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  customPrice    Float?
+  customDuration Int?
+
+  @@unique([professionalId, serviceId])
+}
+
+// ==================== PROCEDURE TYPE ====================
+model ProcedureType {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  reminderEnabled Boolean @default(true)
+  reminderDays    Int     @default(120)
+  reminderMessage String? @db.Text
+
+  services         Service[]
+  procedureRecords ProcedureRecord[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+// ==================== PRODUCT (PRODUTOS/ESTOQUE) ====================
+model Product {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  professionalId String?
+  professional   Professional? @relation(fields: [professionalId], references: [id])
+
+  name        String
+  description String?
+  sku         String?
+  barcode     String?
+
+  costPrice Float @default(0)
+  salePrice Float @default(0)
+
+  quantity    Int    @default(0)
+  minQuantity Int    @default(5)
+  unit        String @default("un")
+
+  category String?
+  brand    String?
+
+  isActive Boolean @default(true)
+
+  stockMovements StockMovement[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@index([professionalId])
+}
+
+// ==================== STOCK MOVEMENT ====================
+model StockMovement {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  type     StockMovementType
+  quantity Int
+
+  reason        String?
+  appointmentId String?
+  userId        String?
+
+  unitCost  Float?
+  totalCost Float?
+
+  @@index([tenantId])
+  @@index([productId])
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  SALE
+  LOSS
+  ADJUST
+  RETURN
+}
+
+// ==================== CLIENT ====================
+model Client {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name      String
+  email     String?
+  phone     String
+  cpf       String?
+  birthDate DateTime?
+
+  address String?
+  city    String?
+  state   String?
+  zipCode String?
+
+  chatwootContactId String?
+  asaasCustomerId   String?
+
+  prefersAudio            Boolean @default(false)
+  allowsMarketing         Boolean @default(true)
+  notes                   String? @db.Text
+  preferredProfessionalId String?
+
+  isActive Boolean @default(true)
+
+  appointments      Appointment[]
+  payments          Payment[]
+  procedureRecords  ProcedureRecord[]
+  messages          Message[]
+  conversations     Conversation[]
+  upsellSuggestions UpsellSuggestion[]
+
+  @@unique([tenantId, phone])
+  @@index([tenantId])
+  @@index([phone])
+}
+
+// ==================== PROCEDURE RECORD ====================
+model ProcedureRecord {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  procedureTypeId String
+  procedureType   ProcedureType @relation(fields: [procedureTypeId], references: [id])
+
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+
+  performedAt DateTime @default(now())
+  notes       String?  @db.Text
+
+  reminderSentAt       DateTime?
+  reminderScheduledFor DateTime?
+  nextReminderAt       DateTime?
+
+  @@index([clientId])
+  @@index([nextReminderAt])
+}
+
+// ==================== APPOINTMENT ====================
+model Appointment {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+
+  professionalId String
+  professional   Professional @relation(fields: [professionalId], references: [id])
+
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id])
+
+  startTime DateTime
+  endTime   DateTime
+  duration  Int
+
+  googleEventId  String?
+  googleMeetLink String?
+
+  status AppointmentStatus @default(SCHEDULED)
+
+  notes         String? @db.Text
+  internalNotes String? @db.Text
+
+  reminder24hSent   Boolean   @default(false)
+  reminder24hSentAt DateTime?
+  reminder2hSent    Boolean   @default(false)
+  reminder2hSentAt  DateTime?
+
+  clientConfirmed   Boolean?
+  clientConfirmedAt DateTime?
+
+  price Float?
+
+  source AppointmentSource @default(MANUAL)
+
+  payment          Payment?
+  procedureRecords ProcedureRecord[]
+  triggerUpsells   UpsellSuggestion[] @relation("TriggerAppointment")
+  resultUpsell     UpsellSuggestion?  @relation("ResultAppointment")
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([professionalId])
+  @@index([startTime])
+  @@index([status])
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELED
+  NO_SHOW
+}
+
+enum AppointmentSource {
+  MANUAL
+  AI
+  ONLINE
+  WHATSAPP
+}
+
+// ==================== PAYMENT ====================
+model Payment {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+
+  appointmentId String?      @unique
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+
+  amount      Float
+  description String?
+
+  asaasPaymentId String?
+  billingType    BillingType @default(PIX)
+  dueDate        DateTime
+  paidAt         DateTime?
+
+  invoiceUrl String?
+  pixCode    String? @db.Text
+  pixQrCode  String? @db.Text
+
+  status PaymentStatus @default(PENDING)
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([status])
+}
+
+enum BillingType {
+  PIX
+  BOLETO
+  CREDIT_CARD
+}
+
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  RECEIVED
+  OVERDUE
+  REFUNDED
+  CANCELED
+}
+
+// ==================== MESSAGE ====================
+model Message {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  content String      @db.Text
+  role    MessageRole
+
+  chatwootMessageId      String?
+  chatwootConversationId String?
+
+  metadata Json?
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([conversationId])
+  @@index([createdAt])
+}
+
+enum MessageRole {
+  HUMAN
+  ASSISTANT
+  SYSTEM
+}
+
+// ==================== AI CONVERSATION ====================
+model AIConversation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title    String?
+  messages AIMessage[]
+  isActive Boolean     @default(true)
+
+  @@index([tenantId])
+  @@index([userId])
+}
+
+model AIMessage {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  conversationId String
+  conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  role     AIMessageRole
+  content  String        @db.Text
+  metadata Json?
+
+  @@index([conversationId])
+}
+
+enum AIMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+// ==================== CONVERSATION (INBOX) ====================
+model Conversation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  status  ConversationStatus  @default(OPEN)
+  channel ConversationChannel @default(WHATSAPP)
+
+  assignedToId String?
+  assignedTo   User?   @relation(fields: [assignedToId], references: [id])
+
+  professionalId String?
+
+  aiEnabled         Boolean @default(true)
+  aiSchedulingState Json?
+
+  messageCount       Int       @default(0)
+  unreadCount        Int       @default(0)
+  lastMessageAt      DateTime?
+  lastMessagePreview String?
+  avgResponseTime    Int?
+
+  score          Int             @default(0)
+  temperature    LeadTemperature @default(COLD)
+  sentiment      Float?
+  purchaseIntent PurchaseIntent  @default(NONE)
+
+  messages   Message[]
+  tags       ConversationTag[]
+  activities ConversationActivity[]
+  notes      ConversationNote[]
+
+  @@unique([tenantId, clientId])
+  @@index([tenantId, status])
+  @@index([tenantId, lastMessageAt])
+  @@index([tenantId, temperature])
+  @@index([assignedToId])
+  @@index([professionalId])
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum ConversationChannel {
+  WHATSAPP
+  EMAIL
+  SMS
+  WEBCHAT
+}
+
+enum LeadTemperature {
+  COLD
+  WARM
+  HOT
+}
+
+enum PurchaseIntent {
+  NONE
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// ==================== TAG ====================
+model Tag {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name     String
+  color    String  @default("#3B82F6")
+  icon     String?
+  category String?
+
+  conversations ConversationTag[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model ConversationTag {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  tagId String
+  tag   Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  assignedById String?
+
+  @@unique([conversationId, tagId])
+  @@index([tagId])
+}
+
+// ==================== CONVERSATION ACTIVITY ====================
+model ConversationActivity {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  type        ActivityType
+  title       String
+  description String?
+  metadata    Json?
+
+  performedById String?
+
+  @@index([conversationId, createdAt])
+}
+
+enum ActivityType {
+  CONVERSATION_STARTED
+  MESSAGE_RECEIVED
+  MESSAGE_SENT
+  TAG_ADDED
+  TAG_REMOVED
+  STATUS_CHANGED
+  ASSIGNED
+  UNASSIGNED
+  AI_ENABLED
+  AI_DISABLED
+  SCORE_UPDATED
+  NOTE_ADDED
+  APPOINTMENT_CREATED
+  APPOINTMENT_CONFIRMED
+  REMINDER_SENT
+  CLIENT_MERGED
+}
+
+// ==================== CONVERSATION NOTE ====================
+model ConversationNote {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  content  String  @db.Text
+  authorId String?
+  isPinned Boolean @default(false)
+
+  @@index([conversationId, createdAt])
+}
+
+// ==================== CANNED RESPONSE ====================
+model CannedResponse {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  title    String
+  content  String  @db.Text
+  shortcut String?
+  category String?
+
+  @@unique([tenantId, shortcut])
+  @@index([tenantId])
+}
+
+// ==================== UPSELL SYSTEM ====================
+
+// Regra de upsell - configura quando sugerir o quê
+model UpsellRule {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String // Ex: "Botox + Preenchimento"
+  description String? @db.Text
+
+  // Trigger: Quando o cliente compra/agenda ESTE serviço...
+  triggerServiceId String
+  triggerService   Service @relation("TriggerService", fields: [triggerServiceId], references: [id])
+
+  // Suggestion: ...sugere ESTE serviço
+  suggestServiceId String
+  suggestService   Service @relation("SuggestService", fields: [suggestServiceId], references: [id])
+
+  // Configurações
+  discountPercent Float?  @default(0) // Desconto oferecido (%)
+  discountFixed   Float?  @default(0) // Desconto fixo (R$)
+  priority        Int     @default(0) // Maior = mais prioritário
+  isActive        Boolean @default(true)
+
+  // Timing: Quando sugerir
+  suggestTiming UpsellTiming @default(AFTER_BOOKING)
+
+  // Condições opcionais
+  minDaysSinceLastService Int? // Só sugere se cliente não fez há X dias
+  maxTimesOffered         Int? @default(3) // Máx vezes para oferecer ao mesmo cliente
+
+  // Mensagem customizada (suporta variáveis)
+  customMessage String? @db.Text
+
+  // Tracking
+  suggestions UpsellSuggestion[]
+
+  @@unique([tenantId, triggerServiceId, suggestServiceId])
+  @@index([tenantId, isActive])
+  @@index([triggerServiceId])
+}
+
+enum UpsellTiming {
+  DURING_CHAT // Durante a conversa de agendamento
+  AFTER_BOOKING // Logo após confirmar agendamento
+  AFTER_SERVICE // Após realizar o serviço
+  REMINDER // No lembrete de 24h
+}
+
+// Histórico de sugestões de upsell
+model UpsellSuggestion {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  ruleId String
+  rule   UpsellRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  // Contexto
+  triggerAppointmentId String? // Agendamento que disparou o upsell
+  triggerAppointment   Appointment? @relation("TriggerAppointment", fields: [triggerAppointmentId], references: [id])
+
+  // Resultado
+  status UpsellStatus @default(SUGGESTED)
+
+  // Se converteu
+  resultAppointmentId String?      @unique
+  resultAppointment   Appointment? @relation("ResultAppointment", fields: [resultAppointmentId], references: [id])
+
+  // Valores
+  originalPrice  Float? // Preço original do serviço sugerido
+  discountAmount Float? // Desconto aplicado
+  finalPrice     Float? // Preço final
+
+  // Tracking
+  suggestedAt DateTime  @default(now())
+  viewedAt    DateTime?
+  respondedAt DateTime?
+  convertedAt DateTime?
+  rejectedAt  DateTime?
+
+  // Canal onde foi sugerido
+  channel String? @default("WHATSAPP")
+
+  // Resposta do cliente (se houver)
+  clientResponse String? @db.Text
+
+  @@index([tenantId, status])
+  @@index([clientId])
+  @@index([ruleId])
+  @@index([createdAt])
+}
+
+enum UpsellStatus {
+  SUGGESTED // Sugerido, aguardando resposta
+  VIEWED // Cliente viu a sugestão
+  ACCEPTED // Cliente aceitou
+  REJECTED // Cliente recusou
+  CONVERTED // Virou agendamento
+  EXPIRED // Expirou sem resposta
+}
